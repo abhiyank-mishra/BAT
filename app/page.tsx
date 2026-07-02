@@ -1045,7 +1045,7 @@ export default function BMSConnectApp() {
     margin: "0 auto",
     minHeight: "100vh",
     padding: "20px 16px",
-    backgroundColor: "#0f172a",
+    backgroundColor: "#000000",
     color: "#ffffff",
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
     display: "flex",
@@ -1055,8 +1055,8 @@ export default function BMSConnectApp() {
   };
 
   const cardStyle: React.CSSProperties = {
-    backgroundColor: "#1e293b",
-    border: "1px solid #334155",
+    backgroundColor: "#111111",
+    border: "1px solid #222222",
     borderRadius: "16px",
     padding: "24px",
     textAlign: "center",
@@ -1068,8 +1068,8 @@ export default function BMSConnectApp() {
   };
 
   const buttonStyle: React.CSSProperties = {
-    backgroundColor: "#3b82f6",
-    color: "white",
+    backgroundColor: "#ffffff",
+    color: "#000000",
     border: "none",
     borderRadius: "12px",
     padding: "16px 24px",
@@ -1077,7 +1077,7 @@ export default function BMSConnectApp() {
     fontWeight: "bold",
     cursor: "pointer",
     transition: "background-color 0.2s ease, transform 0.1s ease",
-    boxShadow: "0 4px 6px -1px rgba(59, 130, 246, 0.4)",
+    boxShadow: "none",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -1222,7 +1222,7 @@ export default function BMSConnectApp() {
                 <svg style={{ width: "20px", height: "20px" }} viewBox="0 0 24 24" fill="currentColor">
                   <path d="M7 17h10v-2H7v2zm0-4h10v-2H7v2zm0-4h10V7H7v2zm-2 12c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H5zm0-2h14V5H5v14z" />
                 </svg>
-                Scan Vehicles
+                Scan
               </button>
 
               <button
@@ -1231,14 +1231,11 @@ export default function BMSConnectApp() {
                 onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
                 onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
               >
-                🔥 FIRE EMERGENCY
+                Fast Mode
               </button>
             </div>
           )}
 
-          <div style={{ marginTop: "60px", textAlign: "center", color: "#64748b", fontSize: "12px" }}>
-            Works with JBD, DALY, JK, ANT &amp; Generic UART Bluetooth BMS
-          </div>
         </div>
       )}
 
