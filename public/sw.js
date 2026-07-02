@@ -1,4 +1,4 @@
-const CACHE_NAME = "bms-connect-v1";
+const CACHE_NAME = "bms-connect-v2";
 const ASSETS = [
   "/",
   "/manifest.json",
@@ -6,7 +6,9 @@ const ASSETS = [
   "/icon-512x512.png"
 ];
 
+// Force immediate activation of the new Service Worker
 self.addEventListener("install", (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS);
@@ -14,7 +16,9 @@ self.addEventListener("install", (event) => {
   );
 });
 
+// Clear old cache versions and claim clients immediately
 self.addEventListener("activate", (event) => {
+  self.clients.claim();
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
@@ -28,10 +32,25 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Network-First caching strategy: Fetch from network first, fallback to cache if offline
 self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") return;
+
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      return cachedResponse || fetch(event.request);
-    })
+    fetch(event.request)
+      .then((networkResponse) => {
+        // Cache a clone of the response if it was successful
+        if (networkResponse && networkResponse.status === 200) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => {
+        // Offline: Fallback to local cache
+        return caches.match(event.request);
+      })
   );
 });

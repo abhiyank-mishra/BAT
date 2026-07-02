@@ -152,8 +152,21 @@ export default function BMSConnectApp() {
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker
           .register("/sw.js")
-          .then((reg) => console.log("Service Worker registered:", reg.scope))
+          .then((reg) => {
+            console.log("Service Worker registered:", reg.scope);
+            // Force update check on load
+            reg.update();
+          })
           .catch((err) => console.error("Service Worker registration failed:", err));
+
+        // Reload page immediately when a new service worker version is activated
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (!refreshing) {
+            refreshing = true;
+            window.location.reload();
+          }
+        });
       }
     }
   }, []);
