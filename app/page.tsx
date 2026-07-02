@@ -237,7 +237,7 @@ export default function BMSConnectApp() {
         throw new Error("Emergency: Required services not found.");
       }
 
-      // Step 5: Get write characteristic immediately
+       // Step 5: Get write characteristic immediately
       let writeUuid: string | number = 0xffe2;
       if (connectedUUID.includes("FF00")) {
         writeUuid = 0xff02;
@@ -248,6 +248,76 @@ export default function BMSConnectApp() {
       }
 
       const writeChar = await service.getCharacteristic(writeUuid);
+
+      // Try an initial write test to see if the characteristic is already open/unlocked
+      let needsAuth = false;
+      const testOffCmd = [0xdd, 0x5a, 0xe1, 0x02, 0x00, 0x00, 0xff, 0x1d, 0x77]; // JBD test command
+      try {
+        const testArray = new Uint8Array(testOffCmd);
+        if (typeof writeChar.writeValueWithoutResponse === "function") {
+          await writeChar.writeValueWithoutResponse(testArray);
+        } else {
+          await writeChar.writeValue(testArray);
+        }
+      } catch (err: any) {
+        // If it throws an authorization, permission, or security error, mark it as needing authentication
+        const errMsg = (err.message || "").toLowerCase();
+        if (
+          errMsg.includes("security") ||
+          errMsg.includes("authorize") ||
+          errMsg.includes("permission") ||
+          errMsg.includes("not permitted") ||
+          errMsg.includes("auth") ||
+          errMsg.includes("login")
+        ) {
+          needsAuth = true;
+        }
+      }
+
+      if (needsAuth) {
+        // Try sending default authorization/password sequences first in case the BMS is locked
+        const commonPins = ["123456", "000000", "1234", "0000", "888888", "12345678"];
+
+        const makeJKAuthPayload = (pin: string) => {
+          const header = [0xaa, 0x55, 0x90, 0xeb, 0x05, pin.length];
+          const pinBytes = pin.split("").map((c) => c.charCodeAt(0));
+          const fullBytes = [...header, ...pinBytes];
+          const sum = fullBytes.reduce((acc, b) => acc + b, 0);
+          const checksum = (256 - (sum & 0xff)) & 0xff;
+          return [...fullBytes, checksum];
+        };
+
+        const makeDalyAuthPayload = (pin: string) => {
+          const header = [0xa5, 0x40, 0x05, 0x08];
+          const pinBytes = pin.split("").map((c) => c.charCodeAt(0));
+          while (pinBytes.length < 8) {
+            pinBytes.push(0x00);
+          }
+          const fullBytes = [...header, ...pinBytes];
+          const sum = fullBytes.reduce((acc, b) => acc + b, 0);
+          const checksum = sum & 0xff;
+          return [...fullBytes, checksum];
+        };
+
+        const authSequences: number[][] = [];
+        for (const pin of commonPins) {
+          authSequences.push(makeJKAuthPayload(pin));
+          authSequences.push(makeDalyAuthPayload(pin));
+        }
+
+        for (const authCmd of authSequences) {
+          try {
+            const authArray = new Uint8Array(authCmd);
+            if (typeof writeChar.writeValueWithoutResponse === "function") {
+              await writeChar.writeValueWithoutResponse(authArray);
+            } else {
+              await writeChar.writeValue(authArray);
+            }
+          } catch (e) {
+            console.log("Auth attempt skipped or failed:", e);
+          }
+        }
+      }
 
       // Step 6 & 7: Continuous OFF signaling loop (20 times)
       setEmergencyState("sending");
