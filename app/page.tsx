@@ -120,6 +120,8 @@ export default function BMSConnectApp() {
   const [deviceId, setDeviceId] = useState("");
   const [toast, setToast] = useState<{ message: string; type: "error" | "info" | "success" } | null>(null);
   const [rawPackets, setRawPackets] = useState<{ timestamp: string; hex: string }[]>([]);
+  const [emergencyState, setEmergencyState] = useState<"idle" | "connecting" | "sending" | "success" | "failed">("idle");
+  const [emergencyCount, setEmergencyCount] = useState<number>(0);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
 
   // Web Bluetooth references
@@ -179,6 +181,127 @@ export default function BMSConnectApp() {
     setStats(initialStats);
     setDetectedProtocol("Unknown");
     setConnectedServiceUUID("");
+  };
+
+  // =================================================================
+  // EMERGENCY PANIC FLOW
+  // =================================================================
+
+  const handleEmergencyFlow = async () => {
+    if (!(navigator as any).bluetooth) {
+      showToast("Web Bluetooth support nahi hai", "error");
+      return;
+    }
+
+    let gattServer: any = null;
+    let localDevice: any = null;
+
+    try {
+      // Step 1: Call requestDevice with filters
+      localDevice = await (navigator as any).bluetooth.requestDevice({
+        filters: [
+          { services: [0xFF00] },
+          { services: [0xFFE0] },
+          { services: ["6e400001-b5a3-f393-e0a9-e50e24dcca9e"] }
+        ],
+        optionalServices: [
+          0xff00,
+          0xffe0,
+          "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+        ]
+      });
+
+      // Step 2: Show fullscreen red overlay immediately
+      setEmergencyState("connecting");
+      setEmergencyCount(0);
+
+      // Step 3: Connect GATT as fast as possible
+      gattServer = await localDevice.gatt.connect();
+
+      // Step 4: Try service UUIDs in order
+      const uuidsToTry = [0xff00, 0xffe0, "6e400001-b5a3-f393-e0a9-e50e24dcca9e"];
+      let service: any = null;
+      let connectedUUID = "";
+
+      for (const uuid of uuidsToTry) {
+        try {
+          service = await gattServer.getPrimaryService(uuid);
+          connectedUUID = typeof uuid === "number" ? "0x" + uuid.toString(16).toUpperCase() : uuid;
+          break;
+        } catch (e) {
+          console.log(`Emergency connection: service ${uuid} failed, trying next...`);
+        }
+      }
+
+      if (!service) {
+        throw new Error("Emergency: Required services not found.");
+      }
+
+      // Step 5: Get write characteristic immediately
+      let writeUuid: string | number = 0xffe2;
+      if (connectedUUID.includes("FF00")) {
+        writeUuid = 0xff02;
+      } else if (connectedUUID.includes("FFE0")) {
+        writeUuid = 0xffe2;
+      } else if (connectedUUID === "6e400001-b5a3-f393-e0a9-e50e24dcca9e") {
+        writeUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+      }
+
+      const writeChar = await service.getCharacteristic(writeUuid);
+
+      // Step 6 & 7: Continuous OFF signaling loop (20 times)
+      setEmergencyState("sending");
+
+      const offCommands = [
+        [0xdd, 0x5a, 0xe1, 0x02, 0x00, 0x00, 0xff, 0x1d, 0x77], // JBD Charge OFF
+        [0xdd, 0x5a, 0xe2, 0x02, 0x00, 0x00, 0xff, 0x1c, 0x77], // JBD Discharge OFF
+        [0xa5, 0x40, 0x97, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x84], // DALY MOS OFF
+        [0x5a, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5a], // ANT OFF
+        [0xaa, 0x5a, 0x90, 0x00, 0xff, 0xff, 0xff, 0xff] // Generic OFF
+      ];
+
+      for (let round = 1; round <= 20; round++) {
+        for (const cmd of offCommands) {
+          try {
+            const dataArray = new Uint8Array(cmd);
+            if (typeof writeChar.writeValueWithoutResponse === "function") {
+              await writeChar.writeValueWithoutResponse(dataArray);
+            } else {
+              await writeChar.writeValue(dataArray);
+            }
+          } catch (err) {
+            console.error(`Emergency round ${round} write failed:`, err);
+          }
+        }
+        setEmergencyCount(round);
+
+        if (round < 20) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+
+      setEmergencyState("success");
+
+      // Disconnect cleanly after success
+      try {
+        if (localDevice && localDevice.gatt.connected) {
+          localDevice.gatt.disconnect();
+        }
+      } catch (e) {
+        console.error("Disconnect after success failed:", e);
+      }
+
+    } catch (error) {
+      console.error("Emergency connection failed:", error);
+      setEmergencyState("failed");
+      try {
+        if (localDevice && localDevice.gatt.connected) {
+          localDevice.gatt.disconnect();
+        }
+      } catch (e) {
+        console.error("Cleanup disconnect failed:", e);
+      }
+    }
   };
 
   // =================================================================
@@ -891,6 +1014,26 @@ export default function BMSConnectApp() {
     gap: "8px",
   };
 
+  const emergencyButtonStyle: React.CSSProperties = {
+    backgroundColor: "#dc2626",
+    color: "white",
+    border: "none",
+    borderRadius: "12px",
+    padding: "16px 24px",
+    fontSize: "18px",
+    fontWeight: "bold",
+    cursor: "pointer",
+    transition: "background-color 0.2s ease, transform 0.1s ease",
+    animation: "pulseGlow 1.5s infinite",
+    width: "100%",
+    boxSizing: "border-box",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "8px",
+    marginTop: "12px",
+  };
+
   const badgeStyle = (proto: string): React.CSSProperties => {
     let bg = "#64748b"; // gray
     if (proto === "JBD") bg = "#3b82f6"; // blue
@@ -920,6 +1063,29 @@ export default function BMSConnectApp() {
 
   return (
     <main style={containerStyle}>
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        @keyframes pulseGlow {
+          0% {
+            box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7);
+            transform: scale(1);
+          }
+          50% {
+            transform: scale(1.02);
+          }
+          70% {
+            box-shadow: 0 0 0 15px rgba(220, 38, 38, 0);
+          }
+          100% {
+            box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+            transform: scale(1);
+          }
+        }
+      `}</style>
+
       {/* Toast Alert */}
       {toast && (
         <div
@@ -976,17 +1142,28 @@ export default function BMSConnectApp() {
               </p>
             </div>
           ) : (
-            <button
-              onClick={handleScanAndConnect}
-              style={buttonStyle}
-              onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-              onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
-            >
-              <svg style={{ width: "20px", height: "20px" }} viewBox="0 0 24 24" fill="currentColor">
-                <path d="M7 17h10v-2H7v2zm0-4h10v-2H7v2zm0-4h10V7H7v2zm-2 12c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H5zm0-2h14V5H5v14z" />
-              </svg>
-              Scan Vehicles
-            </button>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", width: "100%" }}>
+              <button
+                onClick={handleScanAndConnect}
+                style={buttonStyle}
+                onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
+              >
+                <svg style={{ width: "20px", height: "20px" }} viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M7 17h10v-2H7v2zm0-4h10v-2H7v2zm0-4h10V7H7v2zm-2 12c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H5zm0-2h14V5H5v14z" />
+                </svg>
+                Scan Vehicles
+              </button>
+
+              <button
+                onClick={handleEmergencyFlow}
+                style={emergencyButtonStyle}
+                onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+                onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
+              >
+                🔥 FIRE EMERGENCY
+              </button>
+            </div>
           )}
 
           <div style={{ marginTop: "60px", textAlign: "center", color: "#64748b", fontSize: "12px" }}>
@@ -1009,12 +1186,6 @@ export default function BMSConnectApp() {
               marginBottom: "24px",
             }}
           />
-          <style>{`
-            @keyframes spin {
-              0% { transform: rotate(0deg); }
-              100% { transform: rotate(360deg); }
-            }
-          `}</style>
           <h2 style={{ fontSize: "20px", fontWeight: "bold", marginBottom: "8px" }}>Connecting...</h2>
           <p style={{ color: "#94a3b8", fontSize: "14px", textAlign: "center", padding: "0 20px" }}>
             {connectingMsg}
@@ -1330,6 +1501,146 @@ export default function BMSConnectApp() {
             )}
           </div>
 
+        </div>
+      )}
+
+      {/* EMERGENCY MODE OVERLAY */}
+      {emergencyState !== "idle" && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100vw",
+            height: "100vh",
+            backgroundColor: "#7f1d1d",
+            zIndex: 9999,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            alignItems: "center",
+            color: "white",
+            fontFamily: "sans-serif",
+            padding: "24px",
+            boxSizing: "border-box",
+            textAlign: "center",
+            gap: "24px",
+          }}
+        >
+          {emergencyState === "connecting" && (
+            <>
+              <div style={{ fontSize: "72px", animation: "spin 2s linear infinite" }}>⚠️</div>
+              <h2 style={{ fontSize: "28px", fontWeight: "900", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                EMERGENCY MODE
+              </h2>
+              <p style={{ fontSize: "22px", fontWeight: "bold", color: "#fca5a5" }}>
+                Connecting to battery...
+              </p>
+            </>
+          )}
+
+          {emergencyState === "sending" && (
+            <>
+              <div
+                style={{
+                  width: "80px",
+                  height: "80px",
+                  border: "8px solid #991b1b",
+                  borderTopColor: "#ef4444",
+                  borderRadius: "50%",
+                  animation: "spin 1s linear infinite",
+                }}
+              />
+              <h2 style={{ fontSize: "28px", fontWeight: "900", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                EMERGENCY SHUTDOWN
+              </h2>
+              <p style={{ fontSize: "32px", fontWeight: "900", color: "#fca5a5" }}>
+                OFF Signal Sent: {emergencyCount}/20
+              </p>
+              <p style={{ fontSize: "20px", color: "#fecaca" }}>
+                Sending continuous OFF signals...
+              </p>
+            </>
+          )}
+
+          {emergencyState === "success" && (
+            <>
+              <div
+                style={{
+                  width: "80px",
+                  height: "80px",
+                  backgroundColor: "#16a34a",
+                  borderRadius: "50%",
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  fontSize: "48px",
+                  boxShadow: "0 0 20px #16a34a",
+                }}
+              >
+                ✓
+              </div>
+              <h2 style={{ fontSize: "28px", fontWeight: "900", color: "#4ade80" }}>
+                Battery OFF Signal Sent 20x
+              </h2>
+              <p style={{ fontSize: "22px", fontWeight: "bold", color: "#fecaca" }}>
+                Jitna possible tha utna band kar diya
+              </p>
+              <button
+                onClick={() => setEmergencyState("idle")}
+                style={{
+                  ...buttonStyle,
+                  backgroundColor: "#ffffff",
+                  color: "#7f1d1d",
+                  width: "100%",
+                  maxWidth: "320px",
+                  fontSize: "22px",
+                  marginTop: "20px",
+                }}
+              >
+                Close
+              </button>
+            </>
+          )}
+
+          {emergencyState === "failed" && (
+            <>
+              <div style={{ fontSize: "72px" }}>❌</div>
+              <h2 style={{ fontSize: "26px", fontWeight: "900", color: "#fca5a5" }}>
+                Connect nahi hua
+              </h2>
+              <p style={{ fontSize: "22px", fontWeight: "bold", color: "#ffffff" }}>
+                Vehicle range me hai?
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%", maxWidth: "320px", marginTop: "20px" }}>
+                <button
+                  onClick={handleEmergencyFlow}
+                  style={{
+                    ...buttonStyle,
+                    backgroundColor: "#3b82f6",
+                    color: "white",
+                    fontSize: "22px",
+                    width: "100%",
+                  }}
+                >
+                  Retry
+                </button>
+                <button
+                  onClick={() => setEmergencyState("idle")}
+                  style={{
+                    ...buttonStyle,
+                    backgroundColor: "transparent",
+                    border: "2px solid white",
+                    color: "white",
+                    fontSize: "22px",
+                    width: "100%",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </main>
